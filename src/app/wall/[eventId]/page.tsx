@@ -1,105 +1,180 @@
 'use client'
 
-import { useState, useEffect, use } from 'react'
+import { useState, useEffect, useRef, use } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { Photo } from '@/types'
 
 export default function WallPage({ params }: { params: Promise<{ eventId: string }> }) {
     const { eventId } = use(params)
     const [photos, setPhotos] = useState<Photo[]>([])
-    const [newest, setNewest] = useState<Photo | null>(null)
     const [eventTitle, setEventTitle] = useState('')
+    const [newPhotoIds, setNewPhotoIds] = useState<Set<string>>(new Set())
+    const [connected, setConnected] = useState(false)
+    const [photoCount, setPhotoCount] = useState(0)
+    const knownIdsRef = useRef<Set<string>>(new Set())
+    const pollRef = useRef<NodeJS.Timeout | null>(null)
 
     useEffect(() => {
         const supabase = createClient()
 
-        // Load initial photos
-        supabase
-            .from('events')
-            .select('title')
-            .eq('id', eventId)
-            .single()
-            .then(({ data }) => setEventTitle(data?.title ?? 'Live Event'))
+        // 1. Load initial data first
+        async function init() {
+            const [{ data: event }, { data: initialPhotos }] = await Promise.all([
+                supabase.from('events').select('title').eq('id', eventId).single(),
+                supabase
+                    .from('photos')
+                    .select('*')
+                    .eq('event_id', eventId)
+                    .order('created_at', { ascending: false })
+                    .limit(40),
+            ])
 
-        supabase
-            .from('photos')
-            .select('*')
-            .eq('event_id', eventId)
-            .order('created_at', { ascending: false })
-            .limit(30)
-            .then(({ data }) => setPhotos(data ?? []))
+            setEventTitle(event?.title ?? 'Live Event')
 
-        // Subscribe to new photos in real-time
-        const channel = supabase
-            .channel(`wall:${eventId}`)
-            .on(
-                'postgres_changes',
-                {
-                    event: 'INSERT',
-                    schema: 'public',
-                    table: 'photos',
-                    filter: `event_id=eq.${eventId}`,
-                },
-                (payload) => {
-                    const photo = payload.new as Photo
-                    setNewest(photo)
-                    setPhotos(prev => [photo, ...prev].slice(0, 30))
-                    setTimeout(() => setNewest(null), 4000)
+            const photos = initialPhotos ?? []
+            setPhotos(photos)
+            setPhotoCount(photos.length)
+            photos.forEach(p => knownIdsRef.current.add(p.id))
+        }
+
+        // 2. Poll every 8 seconds as a guaranteed fallback
+        function startPolling() {
+            pollRef.current = setInterval(async () => {
+                const { data } = await supabase
+                    .from('photos')
+                    .select('*')
+                    .eq('event_id', eventId)
+                    .order('created_at', { ascending: false })
+                    .limit(40)
+
+                if (!data) return
+
+                const truly_new = data.filter(p => !knownIdsRef.current.has(p.id))
+                if (truly_new.length > 0) {
+                    truly_new.forEach(p => knownIdsRef.current.add(p.id))
+                    setPhotos(data)
+                    setPhotoCount(data.length)
+                    flashNew(truly_new.map(p => p.id))
                 }
-            )
-            .subscribe()
+            }, 8000)
+        }
 
-        return () => { supabase.removeChannel(channel) }
+        // 3. Realtime subscription — works instantly when WebSocket is live
+        function startRealtime() {
+            const channel = supabase
+                .channel(`wall-photos-${eventId}`, {
+                    config: { broadcast: { self: true } },
+                })
+                .on(
+                    'postgres_changes',
+                    {
+                        event: 'INSERT',
+                        schema: 'public',
+                        table: 'photos',
+                        filter: `event_id=eq.${eventId}`,
+                    },
+                    (payload) => {
+                        const photo = payload.new as Photo
+                        if (knownIdsRef.current.has(photo.id)) return // already shown by poll
+
+                        knownIdsRef.current.add(photo.id)
+                        setPhotos(prev => {
+                            const updated = [photo, ...prev].slice(0, 40)
+                            setPhotoCount(updated.length)
+                            return updated
+                        })
+                        flashNew([photo.id])
+                    }
+                )
+                .subscribe((status) => {
+                    setConnected(status === 'SUBSCRIBED')
+                })
+
+            return channel
+        }
+
+        init()
+        const channel = startRealtime()
+        startPolling()
+
+        return () => {
+            supabase.removeChannel(channel)
+            if (pollRef.current) clearInterval(pollRef.current)
+        }
     }, [eventId])
+
+    function flashNew(ids: string[]) {
+        setNewPhotoIds(prev => {
+            const next = new Set([...prev, ...ids])
+            return next
+        })
+        setTimeout(() => {
+            setNewPhotoIds(prev => {
+                const next = new Set(prev)
+                ids.forEach(id => next.delete(id))
+                return next
+            })
+        }, 3500)
+    }
 
     return (
         <div className="min-h-screen bg-gray-950 text-white overflow-hidden">
-            {/* Header bar */}
+            {/* Header */}
             <div className="flex items-center justify-between px-8 py-4 border-b border-white/10">
-                <div className="flex items-center gap-3">
-                    <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-                    <span className="text-white/60 text-sm font-medium">LIVE</span>
+                <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-yellow-400'}`} />
+                    <span className="text-white/50 text-xs font-medium tracking-widest uppercase">
+                        {connected ? 'Live' : 'Connecting...'}
+                    </span>
                 </div>
                 <h1 className="text-white font-semibold text-lg">{eventTitle}</h1>
-                <div className="text-white/40 text-sm">{photos.length} photos</div>
+                <div className="text-white/40 text-sm">{photoCount} photos</div>
             </div>
 
-            {/* New photo toast */}
-            {newest && (
-                <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-violet-600 text-white px-5 py-2.5 rounded-full text-sm font-medium shadow-lg z-50 animate-bounce">
-                    New photo added!
+            {/* New photo flash banner */}
+            {newPhotoIds.size > 0 && (
+                <div className="fixed top-16 inset-x-0 flex justify-center z-50 pointer-events-none">
+                    <div className="bg-violet-600 text-white text-sm font-medium px-6 py-2 rounded-full shadow-lg animate-bounce mt-3">
+                        {newPhotoIds.size === 1 ? 'New photo just added!' : `${newPhotoIds.size} new photos!`}
+                    </div>
                 </div>
             )}
 
-            {/* Photo grid */}
+            {/* Grid */}
             {photos.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-[80vh]">
-                    <div className="w-20 h-20 border-2 border-white/20 rounded-full flex items-center justify-center mb-4">
-                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1" opacity="0.4">
+                <div className="flex flex-col items-center justify-center h-[80vh] gap-3">
+                    <div className="w-16 h-16 border border-white/10 rounded-full flex items-center justify-center">
+                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1" opacity="0.3">
                             <rect x="3" y="3" width="18" height="18" rx="2" />
                             <circle cx="8.5" cy="8.5" r="1.5" />
                             <path d="M21 15l-5-5L5 21" />
                         </svg>
                     </div>
-                    <p className="text-white/40 text-sm">Waiting for photos...</p>
-                    <p className="text-white/20 text-xs mt-1">Photos will appear here as they are uploaded</p>
+                    <p className="text-white/30 text-sm">Waiting for photos to be uploaded...</p>
                 </div>
             ) : (
                 <div className="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-2 p-4">
-                    {photos.map((photo, i) => (
-                        <div
-                            key={photo.id}
-                            className={`break-inside-avoid mb-2 rounded-lg overflow-hidden transition-all duration-700 ${i === 0 ? 'ring-2 ring-violet-500 ring-offset-2 ring-offset-gray-950' : ''
-                                }`}
-                        >
-                            <img
-                                src={photo.thumbnail_url ?? photo.public_url}
-                                alt="Event photo"
-                                className="w-full object-cover"
-                                loading="lazy"
-                            />
-                        </div>
-                    ))}
+                    {photos.map((photo) => {
+                        const isNew = newPhotoIds.has(photo.id)
+                        return (
+                            <div
+                                key={photo.id}
+                                className="break-inside-avoid mb-2 rounded-lg overflow-hidden"
+                                style={{
+                                    transition: 'box-shadow 0.5s ease, transform 0.5s ease',
+                                    boxShadow: isNew ? '0 0 0 3px #7c3aed, 0 0 24px #7c3aed88' : 'none',
+                                    transform: isNew ? 'scale(1.02)' : 'scale(1)',
+                                }}
+                            >
+                                <img
+                                    src={photo.thumbnail_url ?? photo.public_url}
+                                    alt="Event photo"
+                                    className="w-full object-cover"
+                                    loading="lazy"
+                                />
+                            </div>
+                        )
+                    })}
                 </div>
             )}
         </div>
