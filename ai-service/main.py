@@ -18,7 +18,7 @@ from face_service import (
     download_image,
     get_face_app,
 )
-from emotion_service import analyze_emotion
+from emotion_service import analyze_emotion, get_emotion_session
 from models import GroupSearchRequest
 
 load_dotenv()
@@ -41,10 +41,10 @@ def verify_secret(credentials: Optional[HTTPAuthorizationCredentials] = Depends(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Warm up models on startup
     logger.info("Warming up AI models...")
     get_face_app()
-    logger.info("Models ready.")
+    get_emotion_session()
+    logger.info("All models ready.")
     yield
 
 
