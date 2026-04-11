@@ -50,12 +50,12 @@ import scipy; print('scipy:', scipy.__version__); \
 import skimage; print('skimage:', skimage.__version__); \
 import insightface; print('insightface imported ok')"
 
-# Pre-download buffalo_l model to /app/.insightface (matches runtime ENV)
+# Pre-download buffalo_sc model (lighter, fits in 512MB RAM)
 RUN python -c "\
 from insightface.app import FaceAnalysis; \
-app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider']); \
-app.prepare(ctx_id=0); \
-print('buffalo_l model cached to /app/.insightface')"
+app = FaceAnalysis(name='buffalo_sc', providers=['CPUExecutionProvider']); \
+app.prepare(ctx_id=0, det_size=(320, 320)); \
+print('buffalo_sc model cached')"
 
 # Pre-download FER+ emotion model
 RUN mkdir -p models && wget -q \

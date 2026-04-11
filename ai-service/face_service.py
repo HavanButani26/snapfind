@@ -18,10 +18,10 @@ def get_face_app() -> FaceAnalysis:
     if _app is None:
         logger.info("Loading InsightFace model...")
         _app = FaceAnalysis(
-            name="buffalo_l",
+            name="buffalo_sc",        # lighter model ~300MB RAM vs buffalo_l ~1.5GB
             providers=["CPUExecutionProvider"],
         )
-        _app.prepare(ctx_id=0, det_size=(640, 640))
+        _app.prepare(ctx_id=0, det_size=(320, 320))   # smaller det_size = less RAM
         logger.info("InsightFace model loaded.")
     return _app
 
@@ -45,19 +45,17 @@ def extract_embeddings(img_bgr: np.ndarray) -> list[dict]:
     for i, face in enumerate(faces):
         embedding = face.embedding.tolist()
         bbox = face.bbox.tolist()
-        results.append(
-            {
-                "face_index": i,
-                "embedding": embedding,
-                "face_bbox": {
-                    "x": float(bbox[0]),
-                    "y": float(bbox[1]),
-                    "w": float(bbox[2] - bbox[0]),
-                    "h": float(bbox[3] - bbox[1]),
-                },
-                "det_score": float(face.det_score),
-            }
-        )
+        results.append({
+            "face_index": i,
+            "embedding": embedding,
+            "face_bbox": {
+                "x": float(bbox[0]),
+                "y": float(bbox[1]),
+                "w": float(bbox[2] - bbox[0]),
+                "h": float(bbox[3] - bbox[1]),
+            },
+            "det_score": float(face.det_score),
+        })
     return results
 
 
@@ -72,7 +70,6 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 def best_face_embedding(faces: list[dict]) -> Optional[list[float]]:
-    """Return embedding of the most confidently detected face."""
     if not faces:
         return None
     best = max(faces, key=lambda f: f.get("det_score", 0))
