@@ -1,10 +1,11 @@
 import os
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional
 
 import numpy as np
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Depends
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import create_client, Client
@@ -16,9 +17,8 @@ from face_service import (
     best_face_embedding,
     image_from_bytes,
     download_image,
-    get_face_app,
 )
-from emotion_service import analyze_emotion, get_emotion_session
+from emotion_service import analyze_emotion
 from models import GroupSearchRequest
 
 load_dotenv()
@@ -32,19 +32,43 @@ AI_SECRET = os.environ.get("AI_SERVICE_SECRET", "dev-secret")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 security = HTTPBearer(auto_error=False)
 
+# Global readiness flag
+models_ready = False
 
-def verify_secret(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+
+def verify_secret(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
     if not credentials or credentials.credentials != AI_SECRET:
         raise HTTPException(status_code=401, detail="Invalid or missing API secret")
     return True
 
 
+def load_models_sync():
+    """Load models in background — does not block startup."""
+    global models_ready
+    try:
+        logger.info("Loading InsightFace model...")
+        from face_service import get_face_app
+        get_face_app()
+        logger.info("InsightFace ready.")
+
+        logger.info("Loading emotion model...")
+        from emotion_service import get_emotion_session
+        get_emotion_session()
+        logger.info("Emotion model ready.")
+
+        models_ready = True
+        logger.info("All models ready — service fully operational.")
+    except Exception as e:
+        logger.error(f"Model loading failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Warming up AI models...")
-    get_face_app()
-    get_emotion_session()
-    logger.info("All models ready.")
+    # Start model loading in a thread — don't block startup
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, load_models_sync)
     yield
 
 
@@ -58,12 +82,27 @@ app.add_middleware(
 )
 
 
+# ── Health — always responds immediately ──────────────────────────────────────
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "snapfind-ai"}
+    return {
+        "status": "ok",
+        "service": "snapfind-ai",
+        "models_ready": models_ready,
+    }
 
 
-# ─── Process a single photo (extract faces + emotions, store embeddings) ───────
+# ── Readiness — use this before sending face requests ─────────────────────────
+
+@app.get("/ready")
+async def ready():
+    if not models_ready:
+        raise HTTPException(status_code=503, detail="Models still loading")
+    return {"status": "ready"}
+
+
+# ── Process photo ─────────────────────────────────────────────────────────────
 
 @app.post("/process-photo", dependencies=[Depends(verify_secret)])
 async def process_photo(
@@ -71,16 +110,15 @@ async def process_photo(
     event_id: str = Form(...),
     image_url: str = Form(...),
 ):
+    if not models_ready:
+        raise HTTPException(status_code=503, detail="Models still loading, retry in 30s")
     try:
         logger.info(f"Processing photo {photo_id}")
-
         image_bytes = await download_image(image_url)
         img_bgr = image_from_bytes(image_bytes)
-
         faces = extract_embeddings(img_bgr)
 
         if not faces:
-            # Mark as processed with no faces
             supabase.table("photos").update(
                 {"is_processed": True}
             ).eq("id", photo_id).execute()
@@ -89,17 +127,15 @@ async def process_photo(
         rows = []
         for face in faces:
             emotion_data = analyze_emotion(img_bgr, face.get("face_bbox"))
-            rows.append(
-                {
-                    "photo_id": photo_id,
-                    "event_id": event_id,
-                    "embedding": face["embedding"],
-                    "face_index": face["face_index"],
-                    "emotion": emotion_data["emotion"],
-                    "emotion_scores": emotion_data["emotion_scores"],
-                    "face_bbox": face["face_bbox"],
-                }
-            )
+            rows.append({
+                "photo_id": photo_id,
+                "event_id": event_id,
+                "embedding": face["embedding"],
+                "face_index": face["face_index"],
+                "emotion": emotion_data["emotion"],
+                "emotion_scores": emotion_data["emotion_scores"],
+                "face_bbox": face["face_bbox"],
+            })
 
         supabase.table("face_embeddings").insert(rows).execute()
         supabase.table("photos").update(
@@ -114,7 +150,7 @@ async def process_photo(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─── Search: match selfie against event face embeddings ───────────────────────
+# ── Face search ───────────────────────────────────────────────────────────────
 
 @app.post("/search", dependencies=[Depends(verify_secret)])
 async def search_faces(
@@ -123,6 +159,8 @@ async def search_faces(
     threshold: float = Form(0.45),
     top_k: int = Form(20),
 ):
+    if not models_ready:
+        raise HTTPException(status_code=503, detail="Models still loading, retry in 30s")
     try:
         selfie_bytes = await selfie.read()
         img_bgr = image_from_bytes(selfie_bytes)
@@ -131,14 +169,13 @@ async def search_faces(
         if not faces:
             raise HTTPException(
                 status_code=400,
-                detail="No face detected in selfie. Please use a clear front-facing photo.",
+                detail="No face detected in selfie. Use a clear front-facing photo.",
             )
 
         query_embedding = best_face_embedding(faces)
         if not query_embedding:
             raise HTTPException(status_code=400, detail="Could not extract face embedding.")
 
-        # Fetch all embeddings for this event
         response = (
             supabase.table("face_embeddings")
             .select("photo_id, embedding, emotion, emotion_scores")
@@ -150,7 +187,6 @@ async def search_faces(
         if not rows:
             return {"photos": [], "matched": 0}
 
-        # Score each stored embedding
         scored: dict[str, dict] = {}
         for row in rows:
             sim = cosine_similarity(query_embedding, row["embedding"])
@@ -167,12 +203,10 @@ async def search_faces(
         if not scored:
             return {"photos": [], "matched": 0}
 
-        # Sort by similarity descending
         top_ids = sorted(
             scored.values(), key=lambda x: x["similarity"], reverse=True
         )[:top_k]
 
-        # Fetch photo URLs
         photo_ids = [r["photo_id"] for r in top_ids]
         photos_response = (
             supabase.table("photos")
@@ -184,24 +218,20 @@ async def search_faces(
         photo_map = {p["id"]: p for p in (photos_response.data or [])}
 
         results = []
-        for scored_photo in top_ids:
-            pid = scored_photo["photo_id"]
+        for s in top_ids:
+            pid = s["photo_id"]
             photo = photo_map.get(pid)
             if photo:
-                results.append(
-                    {
-                        "photo_id": pid,
-                        "public_url": photo["public_url"],
-                        "thumbnail_url": photo.get("thumbnail_url"),
-                        "similarity": scored_photo["similarity"],
-                        "emotion": scored_photo["emotion"],
-                        "emotion_scores": scored_photo["emotion_scores"],
-                    }
-                )
+                results.append({
+                    "photo_id": pid,
+                    "public_url": photo["public_url"],
+                    "thumbnail_url": photo.get("thumbnail_url"),
+                    "similarity": s["similarity"],
+                    "emotion": s["emotion"],
+                    "emotion_scores": s["emotion_scores"],
+                })
 
-        logger.info(
-            f"Search event={event_id}: {len(rows)} embeddings scanned, {len(results)} matched"
-        )
+        logger.info(f"Search event={event_id}: {len(results)} matched from {len(rows)} embeddings")
         return {"photos": results, "matched": len(results)}
 
     except HTTPException:
@@ -211,21 +241,16 @@ async def search_faces(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─── Group photo finder: photos containing ALL selected people ─────────────────
+# ── Group search ──────────────────────────────────────────────────────────────
 
 @app.post("/group-search", dependencies=[Depends(verify_secret)])
 async def group_search(req: GroupSearchRequest):
-    """
-    Find photos where multiple specific people all appear together.
-    person_photo_ids = list of photo IDs, one per person (their representative photo).
-    """
+    if not models_ready:
+        raise HTTPException(status_code=503, detail="Models still loading, retry in 30s")
     try:
         if len(req.person_photo_ids) < 2:
-            raise HTTPException(
-                status_code=400, detail="Select at least 2 people for group search."
-            )
+            raise HTTPException(status_code=400, detail="Select at least 2 people.")
 
-        # Get one representative embedding per person
         query_embeddings = []
         for pid in req.person_photo_ids:
             resp = (
@@ -241,7 +266,6 @@ async def group_search(req: GroupSearchRequest):
         if len(query_embeddings) < 2:
             return {"photos": [], "matched": 0}
 
-        # Fetch all event embeddings
         all_resp = (
             supabase.table("face_embeddings")
             .select("photo_id, embedding")
@@ -250,21 +274,15 @@ async def group_search(req: GroupSearchRequest):
         )
 
         rows = all_resp.data or []
-
-        # For each photo, check which query people appear in it
-        photo_matches: dict[str, set[int]] = {}
+        photo_matches: dict[str, set] = {}
         threshold = 0.45
 
         for row in rows:
             pid = row["photo_id"]
             for i, qemb in enumerate(query_embeddings):
-                sim = cosine_similarity(qemb, row["embedding"])
-                if sim >= threshold:
-                    if pid not in photo_matches:
-                        photo_matches[pid] = set()
-                    photo_matches[pid].add(i)
+                if cosine_similarity(qemb, row["embedding"]) >= threshold:
+                    photo_matches.setdefault(pid, set()).add(i)
 
-        # Keep only photos where ALL people were found
         all_people = set(range(len(query_embeddings)))
         group_photos = [
             pid for pid, found in photo_matches.items()
@@ -281,10 +299,7 @@ async def group_search(req: GroupSearchRequest):
             .execute()
         )
 
-        return {
-            "photos": photos_resp.data or [],
-            "matched": len(group_photos),
-        }
+        return {"photos": photos_resp.data or [], "matched": len(group_photos)}
 
     except HTTPException:
         raise
@@ -293,10 +308,12 @@ async def group_search(req: GroupSearchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─── Batch process all unprocessed photos in an event ─────────────────────────
+# ── Batch process ─────────────────────────────────────────────────────────────
 
 @app.post("/batch-process", dependencies=[Depends(verify_secret)])
 async def batch_process(event_id: str = Form(...)):
+    if not models_ready:
+        raise HTTPException(status_code=503, detail="Models still loading, retry in 30s")
     try:
         resp = (
             supabase.table("photos")
@@ -319,17 +336,15 @@ async def batch_process(event_id: str = Form(...)):
                 rows = []
                 for face in faces:
                     emotion_data = analyze_emotion(img_bgr, face.get("face_bbox"))
-                    rows.append(
-                        {
-                            "photo_id": photo["id"],
-                            "event_id": event_id,
-                            "embedding": face["embedding"],
-                            "face_index": face["face_index"],
-                            "emotion": emotion_data["emotion"],
-                            "emotion_scores": emotion_data["emotion_scores"],
-                            "face_bbox": face["face_bbox"],
-                        }
-                    )
+                    rows.append({
+                        "photo_id": photo["id"],
+                        "event_id": event_id,
+                        "embedding": face["embedding"],
+                        "face_index": face["face_index"],
+                        "emotion": emotion_data["emotion"],
+                        "emotion_scores": emotion_data["emotion_scores"],
+                        "face_bbox": face["face_bbox"],
+                    })
 
                 if rows:
                     supabase.table("face_embeddings").insert(rows).execute()
@@ -338,15 +353,11 @@ async def batch_process(event_id: str = Form(...)):
                     {"is_processed": True}
                 ).eq("id", photo["id"]).execute()
 
-                results.append(
-                    {"photo_id": photo["id"], "faces": len(faces), "status": "ok"}
-                )
+                results.append({"photo_id": photo["id"], "faces": len(faces), "status": "ok"})
 
             except Exception as e:
                 logger.error(f"Failed photo {photo['id']}: {e}")
-                results.append(
-                    {"photo_id": photo["id"], "faces": 0, "status": "error", "error": str(e)}
-                )
+                results.append({"photo_id": photo["id"], "faces": 0, "status": "error", "error": str(e)})
 
         return {"processed": len(results), "results": results}
 
