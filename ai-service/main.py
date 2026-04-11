@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -189,7 +190,10 @@ async def search_faces(
 
         scored: dict[str, dict] = {}
         for row in rows:
-            sim = cosine_similarity(query_embedding, row["embedding"])
+            db_embedding = row["embedding"]
+            if isinstance(db_embedding, str):
+                db_embedding = json.loads(db_embedding)
+            sim = cosine_similarity(query_embedding, db_embedding)
             pid = row["photo_id"]
             if sim >= threshold:
                 if pid not in scored or sim > scored[pid]["similarity"]:
@@ -279,8 +283,11 @@ async def group_search(req: GroupSearchRequest):
 
         for row in rows:
             pid = row["photo_id"]
+            db_emb = row["embedding"]
+            if isinstance(db_emb, str):
+                db_emb = json.loads(db_emb)
             for i, qemb in enumerate(query_embeddings):
-                if cosine_similarity(qemb, row["embedding"]) >= threshold:
+                if cosine_similarity(qemb, db_emb) >= 0.45:
                     photo_matches.setdefault(pid, set()).add(i)
 
         all_people = set(range(len(query_embeddings)))
