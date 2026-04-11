@@ -98,9 +98,46 @@ export async function POST(req: NextRequest) {
         // Increment event photo count
         await supabase.rpc('increment_photo_count', { event_id: eventId })
 
+        if (photo) {
+            triggerAIProcessing(photo.id, eventId, originalUrl).catch((err) =>
+                console.error('AI processing trigger failed:', err)
+            )
+        }
+
         return NextResponse.json({ photo })
     } catch (err) {
         console.error('Upload error:', err)
         return NextResponse.json({ error: 'Upload failed' }, { status: 500 })
+    }
+}
+
+async function triggerAIProcessing(
+    photoId: string,
+    eventId: string,
+    imageUrl: string
+): Promise<void> {
+    const aiUrl = process.env.AI_SERVICE_URL
+    const secret = process.env.AI_SERVICE_SECRET
+
+    if (!aiUrl || !secret) {
+        console.warn('AI service not configured — skipping processing')
+        return
+    }
+
+    const form = new FormData()
+    form.append('photo_id', photoId)
+    form.append('event_id', eventId)
+    form.append('image_url', imageUrl)
+
+    try {
+        await fetch(`${aiUrl}/process-photo`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${secret}`,
+            },
+            body: form,
+        })
+    } catch (err) {
+        console.error('AI processing request failed:', err)
     }
 }

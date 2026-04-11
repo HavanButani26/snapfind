@@ -8,6 +8,8 @@ import { QRModal } from '@/components/photographer/qr-modal'
 import { Button } from '@/components/ui/button'
 import Link from 'next/link'
 import type { Event, Photo } from '@/types'
+const [processing, setProcessing] = useState(false)
+const [processResult, setProcessResult] = useState<string>('')
 
 export default function EventDetailPage({
     params,
@@ -62,6 +64,24 @@ export default function EventDetailPage({
         setEvent(prev => prev ? { ...prev, is_active: !prev.is_active } : prev)
     }
 
+    async function batchProcess() {
+        setProcessing(true)
+        setProcessResult('')
+        try {
+            const res = await fetch('/api/face/batch-process', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ event_id: id }),
+            })
+            const data = await res.json()
+            setProcessResult(`Processed ${data.processed} photos`)
+            fetchPhotos()
+        } catch {
+            setProcessResult('Processing failed')
+        }
+        setProcessing(false)
+    }
+
     if (!event && !loading) return (
         <div className="text-center py-20">
             <p className="text-gray-400">Event not found.</p>
@@ -102,6 +122,29 @@ export default function EventDetailPage({
                     >
                         {event?.is_active ? 'Deactivate' : 'Activate'}
                     </Button>
+                    <Button
+                        variant="secondary"
+                        onClick={batchProcess}
+                        disabled={processing}
+                    >
+                        {processing ? (
+                            <>
+                                <svg className="animate-spin w-4 h-4 mr-1.5" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                </svg>
+                                Processing...
+                            </>
+                        ) : (
+                            <>
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="mr-1.5">
+                                    <circle cx="12" cy="12" r="3" />
+                                    <path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12" />
+                                </svg>
+                                Process AI
+                            </>
+                        )}
+                    </Button>
                     <Link
                         href={`/wall/${id}`}
                         target="_blank"
@@ -115,6 +158,12 @@ export default function EventDetailPage({
                 </div>
             </div>
 
+            {processResult && (
+                <div className="mb-4 px-4 py-2.5 bg-green-50 border border-green-100 rounded-lg text-sm text-green-700">
+                    {processResult} — faces and emotions indexed successfully
+                </div>
+            )}
+
             {/* Tabs */}
             <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit mb-6">
                 {(['photos', 'upload'] as const).map(t => (
@@ -122,8 +171,8 @@ export default function EventDetailPage({
                         key={t}
                         onClick={() => setTab(t)}
                         className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors capitalize ${tab === t
-                                ? 'bg-white text-gray-900 shadow-sm'
-                                : 'text-gray-500 hover:text-gray-700'
+                            ? 'bg-white text-gray-900 shadow-sm'
+                            : 'text-gray-500 hover:text-gray-700'
                             }`}
                     >
                         {t === 'photos' ? `Photos (${photos.length})` : 'Upload'}

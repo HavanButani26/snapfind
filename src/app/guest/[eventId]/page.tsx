@@ -7,10 +7,12 @@ import { cn } from '@/lib/utils'
 type Step = 'landing' | 'upload' | 'searching' | 'results' | 'error'
 
 interface MatchedPhoto {
-    id: string
+    photo_id: string       // ← was 'id'
     public_url: string
-    thumbnail_url: string
-    emotion?: string
+    thumbnail_url: string | null
+    similarity: number
+    emotion: string | null
+    emotion_scores: Record<string, number> | null
 }
 
 interface GuestPageProps {
@@ -222,7 +224,7 @@ export default function GuestPage({ params }: GuestPageProps) {
                                 <div className="grid grid-cols-3 gap-2">
                                     {filtered.map(photo => (
                                         <div
-                                            key={photo.id}
+                                            key={photo.photo_id}
                                             className="aspect-square rounded-xl overflow-hidden cursor-pointer relative group"
                                             onClick={() => setLightbox(photo.public_url)}
                                         >
