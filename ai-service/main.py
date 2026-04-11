@@ -39,12 +39,13 @@ def verify_secret(credentials: Optional[HTTPAuthorizationCredentials] = Depends(
     return True
 
 
+import asyncio
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Warm up models on startup
-    logger.info("Warming up AI models...")
-    get_face_app()
-    logger.info("Models ready.")
+    # Start model warmup in background so /health responds immediately
+    logger.info("Starting background model warmup...")
+    asyncio.create_task(asyncio.to_thread(get_face_app))
     yield
 
 
