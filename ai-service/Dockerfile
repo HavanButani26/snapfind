@@ -21,6 +21,11 @@ RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download InsightFace model
+RUN python - <<EOF
+from insightface.app import FaceAnalysis
+app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+app.prepare(ctx_id=0, det_size=(640, 640))
+EOF
 
 # Pre-download DeepFace model
 RUN python -c "from deepface import DeepFace; import numpy as np; img = np.zeros((100,100,3), dtype=np.uint8); DeepFace.analyze(img, actions=['emotion'], enforce_detection=False, silent=True)" || true

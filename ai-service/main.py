@@ -43,9 +43,6 @@ import asyncio
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Start model warmup in background so /health responds immediately
-    logger.info("Starting background model warmup...")
-    asyncio.create_task(asyncio.to_thread(get_face_app))
     yield
 
 
