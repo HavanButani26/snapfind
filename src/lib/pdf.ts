@@ -1,7 +1,7 @@
 import type { Quotation } from '@/types'
 
 export async function generateQuotationPDF(quotation: Quotation): Promise<void> {
-    const { jsPDF } = await import('jspdf')
+    const jsPDF = (await import('jspdf')).default
     const autoTable = (await import('jspdf-autotable')).default
 
     const doc = new jsPDF()
