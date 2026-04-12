@@ -52,11 +52,25 @@ export function QuotationBuilder({ clients, events, quotation, onClose, onSaved 
     }
 
     async function save() {
-        if (!title || items.every(i => !i.description)) return
+        if (!title) {
+            alert("Please enter a quotation title");
+            return;
+        }
+
+        if (items.every(i => !i.description)) {
+            alert("Please add at least one service description");
+            return;
+        }
         setSaving(true)
 
         const supabase = createClient()
         const { data: { user } } = await supabase.auth.getUser()
+
+        if (!user) {
+            alert("You must be logged in to create a quotation");
+            setSaving(false);
+            return;
+        }
 
         const payload = {
             photographer_id: user!.id,
