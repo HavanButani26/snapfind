@@ -19,10 +19,15 @@ export default function EventsPage() {
 
     async function fetchEvents() {
         const supabase = createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return
+
         const { data } = await supabase
             .from('events')
             .select('*')
+            .eq('photographer_id', user.id)          // ← filter by current user
             .order('created_at', { ascending: false })
+
         setEvents(data ?? [])
         setLoading(false)
     }
@@ -121,38 +126,49 @@ export default function EventsPage() {
                     ))}
                 </div>
             ) : events.length === 0 ? (
-                <div className="text-center py-20">
-                    <p className="text-gray-400 text-sm">No events yet. Create your first event above.</p>
+                <div className="text-center py-20 bg-white border border-gray-100 rounded-xl">
+                    <div className="w-14 h-14 bg-violet-50 rounded-xl mx-auto flex items-center justify-center mb-4">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" strokeWidth="1.5">
+                            <rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" />
+                        </svg>
+                    </div>
+                    <p className="text-gray-500 font-medium mb-1">No events yet</p>
+                    <p className="text-gray-400 text-sm mb-4">Create your first event to get started</p>
+                    <Button onClick={() => setShowCreate(true)}>Create event</Button>
                 </div>
             ) : (
                 <div className="grid grid-cols-3 gap-4">
                     {events.map(event => (
-                        <Link key={event.id} href={`/events/${event.id}`}>
-                            <div className="bg-white border border-gray-100 hover:border-violet-200 rounded-xl p-5 transition-colors cursor-pointer group">
-                                <div className="flex items-start justify-between mb-3">
-                                    <div className="w-10 h-10 bg-violet-50 rounded-lg flex items-center justify-center">
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" strokeWidth="1.8">
-                                            <rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" />
-                                        </svg>
-                                    </div>
-                                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${event.is_active ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'
-                                        }`}>
-                                        {event.is_active ? 'Active' : 'Inactive'}
-                                    </span>
+                        <div key={event.id} className="bg-white border border-gray-100 hover:border-violet-200 rounded-xl p-5 transition-colors group">
+                            <div className="flex items-start justify-between mb-3">
+                                <div className="w-10 h-10 bg-violet-50 rounded-lg flex items-center justify-center">
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" strokeWidth="1.8">
+                                        <rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" />
+                                    </svg>
                                 </div>
-                                <h3 className="font-medium text-gray-900 group-hover:text-violet-700 transition-colors">
-                                    {event.title}
-                                </h3>
-                                <p className="text-xs text-gray-400 mt-1">
-                                    {event.event_date ?? 'No date'} · {event.location ?? 'No location'}
-                                </p>
-                                <div className="mt-3 pt-3 border-t border-gray-50 flex items-center gap-3">
-                                    <span className="text-xs text-gray-500">{event.total_photos} photos</span>
-                                    <span className="text-gray-200">·</span>
-                                    <span className="text-xs text-violet-600">View event →</span>
-                                </div>
+                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${event.is_active ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'
+                                    }`}>
+                                    {event.is_active ? 'Active' : 'Inactive'}
+                                </span>
                             </div>
-                        </Link>
+
+                            <h3 className="font-medium text-gray-900 group-hover:text-violet-700 transition-colors mb-1">
+                                {event.title}
+                            </h3>
+                            <p className="text-xs text-gray-400">
+                                {event.event_date ?? 'No date'} · {event.location ?? 'No location'}
+                            </p>
+
+                            <div className="mt-4 pt-3 border-t border-gray-50 flex items-center justify-between">
+                                <span className="text-xs text-gray-500">{event.total_photos} photos</span>
+                                <Link
+                                    href={`/events/${event.id}`}
+                                    className="text-xs text-violet-600 hover:text-violet-700 font-medium"
+                                >
+                                    View event →
+                                </Link>
+                            </div>
+                        </div>
                     ))}
                 </div>
             )}

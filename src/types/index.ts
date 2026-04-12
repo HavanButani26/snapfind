@@ -49,3 +49,41 @@ export interface FaceEmbedding {
     face_bbox: { x: number; y: number; w: number; h: number } | null
     created_at: string
 }
+
+export interface Client {
+    id: string
+    photographer_id: string
+    name: string
+    email: string | null
+    phone: string | null
+    address: string | null
+    created_at: string
+}
+
+export interface QuotationItem {
+    description: string
+    quantity: number
+    rate: number
+    amount: number
+}
+
+export interface Quotation {
+    id: string
+    photographer_id: string
+    client_id: string | null
+    event_id: string | null
+    quote_number: string
+    title: string
+    status: 'draft' | 'sent' | 'accepted' | 'rejected' | 'paid'
+    items: QuotationItem[]
+    subtotal: number
+    tax_percent: number
+    tax_amount: number
+    total: number
+    notes: string | null
+    valid_until: string | null
+    paid_at: string | null
+    created_at: string
+    clients?: Client
+    events?: { title: string }
+}
