@@ -246,7 +246,6 @@ async def search_faces(
 
 
 # ── Group search ──────────────────────────────────────────────────────────────
-
 @app.post("/group-search", dependencies=[Depends(verify_secret)])
 async def group_search(req: GroupSearchRequest):
     if not models_ready:
@@ -265,7 +264,11 @@ async def group_search(req: GroupSearchRequest):
                 .execute()
             )
             if resp.data:
-                query_embeddings.append(resp.data[0]["embedding"])
+                emb = resp.data[0]["embedding"]
+                # 👇 Normalize query embedding too
+                if isinstance(emb, str):
+                    emb = json.loads(emb)
+                query_embeddings.append(emb)
 
         if len(query_embeddings) < 2:
             return {"photos": [], "matched": 0}
@@ -286,15 +289,17 @@ async def group_search(req: GroupSearchRequest):
             db_emb = row["embedding"]
             if isinstance(db_emb, str):
                 db_emb = json.loads(db_emb)
+
             for i, qemb in enumerate(query_embeddings):
-                if cosine_similarity(qemb, db_emb) >= 0.45:
+                # (optional safety) ensure qemb is parsed
+                if isinstance(qemb, str):
+                    qemb = json.loads(qemb)
+
+                if cosine_similarity(qemb, db_emb) >= threshold:
                     photo_matches.setdefault(pid, set()).add(i)
 
         all_people = set(range(len(query_embeddings)))
-        group_photos = [
-            pid for pid, found in photo_matches.items()
-            if found == all_people
-        ]
+        group_photos = [pid for pid, found in photo_matches.items() if found == all_people]
 
         if not group_photos:
             return {"photos": [], "matched": 0}
@@ -305,7 +310,6 @@ async def group_search(req: GroupSearchRequest):
             .in_("id", group_photos)
             .execute()
         )
-
         return {"photos": photos_resp.data or [], "matched": len(group_photos)}
 
     except HTTPException:
@@ -313,7 +317,6 @@ async def group_search(req: GroupSearchRequest):
     except Exception as e:
         logger.error(f"group_search error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 # ── Batch process ─────────────────────────────────────────────────────────────
 
