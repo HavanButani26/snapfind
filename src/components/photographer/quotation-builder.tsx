@@ -31,6 +31,43 @@ export function QuotationBuilder({ clients, events, quotation, onClose, onSaved 
     const subtotal = items.reduce((s, i) => s + i.amount, 0)
     const taxAmount = (subtotal * Number(taxPercent)) / 100
     const total = subtotal + taxAmount
+    const [showAddClient, setShowAddClient] = useState(false)
+    const [newClientName, setNewClientName] = useState('')
+    const [newClientEmail, setNewClientEmail] = useState('')
+    const [newClientPhone, setNewClientPhone] = useState('')
+    const [addingClient, setAddingClient] = useState(false)
+    const [localClients, setLocalClients] = useState<Client[]>(clients)
+
+    useEffect(() => { setLocalClients(clients) }, [clients])
+
+    async function addClientInline() {
+        if (!newClientName.trim()) return
+        setAddingClient(true)
+
+        const supabase = createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+
+        const { data } = await supabase
+            .from('clients')
+            .insert({
+                photographer_id: user!.id,
+                name: newClientName.trim(),
+                email: newClientEmail || null,
+                phone: newClientPhone || null,
+            })
+            .select()
+            .single()
+
+        if (data) {
+            setLocalClients(prev => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)))
+            setClientId(data.id)
+            setShowAddClient(false)
+            setNewClientName('')
+            setNewClientEmail('')
+            setNewClientPhone('')
+        }
+        setAddingClient(false)
+    }
 
     function updateItem(index: number, field: keyof QuotationItem, value: string | number) {
         setItems(prev => prev.map((item, i) => {
@@ -128,15 +165,60 @@ export function QuotationBuilder({ clients, events, quotation, onClose, onSaved 
 
                     <div className="grid grid-cols-2 gap-4">
                         <div className="flex flex-col gap-1.5">
-                            <label className="text-sm font-medium text-gray-700">Client</label>
-                            <select
-                                value={clientId}
-                                onChange={e => setClientId(e.target.value)}
-                                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
-                            >
-                                <option value="">No client</option>
-                                {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                            </select>
+                            <div className="flex items-center justify-between">
+                                <label className="text-sm font-medium text-gray-700">Client</label>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAddClient(!showAddClient)}
+                                    className="text-xs text-violet-600 hover:text-violet-700 font-medium"
+                                >
+                                    {showAddClient ? 'Cancel' : '+ New client'}
+                                </button>
+                            </div>
+
+                            {showAddClient ? (
+                                <div className="border border-violet-200 rounded-xl p-3 bg-violet-50 flex flex-col gap-2">
+                                    <input
+                                        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white"
+                                        placeholder="Client name *"
+                                        value={newClientName}
+                                        onChange={e => setNewClientName(e.target.value)}
+                                    />
+                                    <input
+                                        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white"
+                                        placeholder="Email (optional)"
+                                        value={newClientEmail}
+                                        onChange={e => setNewClientEmail(e.target.value)}
+                                    />
+                                    <input
+                                        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white"
+                                        placeholder="Phone (optional)"
+                                        value={newClientPhone}
+                                        onChange={e => setNewClientPhone(e.target.value)}
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={addClientInline}
+                                        disabled={!newClientName.trim() || addingClient}
+                                        className="px-3 py-2 bg-violet-600 text-white text-sm rounded-lg hover:bg-violet-700 transition-colors disabled:opacity-50 font-medium"
+                                    >
+                                        {addingClient ? 'Adding...' : 'Add client'}
+                                    </button>
+                                </div>
+                            ) : (
+                                <select
+                                    value={clientId}
+                                    onChange={e => setClientId(e.target.value)}
+                                    className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
+                                >
+                                    <option value="">Select a client</option>
+                                    {localClients.map(c => (
+                                        <option key={c.id} value={c.id}>
+                                            {c.name}{c.phone ? ` · ${c.phone}` : ''}
+                                        </option>
+                                    ))}
+                                </select>
+                            )}
                         </div>
                         <div className="flex flex-col gap-1.5">
                             <label className="text-sm font-medium text-gray-700">Linked event</label>
