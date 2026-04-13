@@ -62,11 +62,27 @@ export default function EventDetail({ id }: { id: string }) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ event_id: id }),
             })
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}))
+                setProcessResult(err.error ?? 'Processing failed')
+                setProcessing(false)
+                return
+            }
+
             const data = await res.json()
-            setProcessResult(`Processed ${data.processed} photos`)
+
+            // Handle both response shapes safely
+            const count = typeof data.processed === 'number'
+                ? data.processed
+                : Array.isArray(data.results)
+                    ? data.results.length
+                    : 0
+
+            setProcessResult(`Processed ${count} photos`)
             fetchPhotos()
-        } catch {
-            setProcessResult('Processing failed')
+        } catch (err) {
+            setProcessResult('Processing failed — check AI service is running')
         }
         setProcessing(false)
     }

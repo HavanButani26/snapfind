@@ -17,7 +17,12 @@ export async function GET(
 
     if (!event) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-    const guestUrl = `${process.env.NEXT_PUBLIC_APP_URL}/guest/${id}`
+    // Fallback: use request origin if env var not set
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL
+        ?? req.nextUrl.origin
+        ?? 'https://snapfind-rho.vercel.app'
+
+    const guestUrl = `${appUrl}/guest/${id}`
 
     const qrDataUrl = await QRCode.toDataURL(guestUrl, {
         width: 400,
@@ -26,7 +31,6 @@ export async function GET(
         errorCorrectionLevel: 'H',
     })
 
-    // Save QR url back to event
     await supabase
         .from('events')
         .update({ qr_code_url: guestUrl })
