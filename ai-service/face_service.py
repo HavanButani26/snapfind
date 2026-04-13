@@ -18,10 +18,10 @@ def get_face_app() -> FaceAnalysis:
     if _app is None:
         logger.info("Loading InsightFace model...")
         _app = FaceAnalysis(
-            name="buffalo_sc",        # lighter model ~300MB RAM vs buffalo_l ~1.5GB
+            name="buffalo_l",        # lighter model ~300MB RAM vs buffalo_l ~1.5GB
             providers=["CPUExecutionProvider"],
         )
-        _app.prepare(ctx_id=0, det_size=(320, 320))   # smaller det_size = less RAM
+        _app.prepare(ctx_id=0, det_size=(640, 640))   # smaller det_size = less RAM
         logger.info("InsightFace model loaded.")
     return _app
 
