@@ -25,18 +25,29 @@ export async function middleware(request: NextRequest) {
 
     const { data: { user } } = await supabase.auth.getUser()
 
-    const protectedPaths = ['/dashboard', '/events', '/photos', '/clients', '/billing']
-    const isProtected = protectedPaths.some(p =>
-        request.nextUrl.pathname.startsWith(p)
-    )
+    const pathname = request.nextUrl.pathname
 
-    if (isProtected && !user) {
+    // Routes only for guests (not logged in)
+    const authRoutes = ['/login', '/register', '/forgot-password']
+    const isAuthRoute = authRoutes.some(r => pathname.startsWith(r))
+
+    // Routes that require login
+    const protectedPaths = ['/dashboard', '/events', '/photos', '/clients', '/billing']
+    const isProtected = protectedPaths.some(p => pathname.startsWith(p))
+
+    // Not logged in → trying to access protected page → send to login
+    if (!user && isProtected) {
         return NextResponse.redirect(new URL('/login', request.url))
+    }
+
+    // Logged in → trying to access auth pages → send to dashboard
+    if (user && isAuthRoute) {
+        return NextResponse.redirect(new URL('/dashboard', request.url))
     }
 
     return supabaseResponse
 }
 
 export const config = {
-    matcher: ['/((?!_next/static|_next/image|favicon.ico|api).*)'],
+    matcher: ['/((?!_next/static|_next/image|favicon.ico|api|auth/confirm|guest|wall).*)'],
 }

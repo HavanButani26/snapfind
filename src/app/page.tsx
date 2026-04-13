@@ -1,6 +1,14 @@
+import { createClient } from '@/lib/supabase/server'
+import { redirect } from 'next/navigation'
 import Link from 'next/link'
 
-export default function HomePage() {
+export default async function HomePage() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  // Already logged in — go straight to dashboard
+  if (user) redirect('/dashboard')
+
   return (
     <main className="min-h-screen flex flex-col items-center justify-center bg-white px-4">
       <div className="max-w-2xl text-center">
