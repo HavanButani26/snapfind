@@ -1,16 +1,23 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardBody, CardHeader } from '@/components/ui/card'
 import { Alert } from '@/components/ui/alert'
 import { signIn } from '@/app/actions/auth'
 
-export default function LoginPage() {
+function LoginForm() {
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState('')
+    const searchParams = useSearchParams()
+
+    useEffect(() => {
+        const urlError = searchParams.get('error')
+        if (urlError) setError(urlError)
+    }, [searchParams])
 
     async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
         e.preventDefault()
@@ -21,7 +28,14 @@ export default function LoginPage() {
         const result = await signIn(formData)
 
         if (result?.error) {
-            setError(result.error)
+            // Make auth errors friendlier
+            if (result.error.toLowerCase().includes('email not confirmed')) {
+                setError('Please confirm your email first. Check your inbox for the confirmation link.')
+            } else if (result.error.toLowerCase().includes('invalid login')) {
+                setError('Incorrect email or password. Please try again.')
+            } else {
+                setError(result.error)
+            }
             setLoading(false)
         }
     }
@@ -90,5 +104,13 @@ export default function LoginPage() {
                 </Card>
             </div>
         </div>
+    )
+}
+
+export default function LoginPage() {
+    return (
+        <Suspense>
+            <LoginForm />
+        </Suspense>
     )
 }
