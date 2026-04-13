@@ -26,6 +26,7 @@ export function GroupFinder({ eventId, onBack }: GroupFinderProps) {
     const [results, setResults] = useState<GroupPhoto[] | null>(null)
     const [searching, setSearching] = useState(false)
     const [loadingPeople, setLoadingPeople] = useState(true)
+    const [lightbox, setLightbox] = useState<string | null>(null)
 
     useEffect(() => {
         loadPeople()
@@ -34,26 +35,42 @@ export function GroupFinder({ eventId, onBack }: GroupFinderProps) {
     async function loadPeople() {
         const supabase = createClient()
 
-        // Get one representative face per unique photo (deduplicated)
-        const { data } = await supabase
+        // Get one face embedding per photo (face_index = 0 only)
+        const { data: embeddings } = await supabase
             .from('face_embeddings')
             .select('photo_id, face_bbox')
             .eq('event_id', eventId)
-            .eq('face_index', 0)   // only primary face per photo
-            .limit(40)
+            .eq('face_index', 0)
 
-        if (!data) { setLoadingPeople(false); return }
+        if (!embeddings || embeddings.length === 0) {
+            setLoadingPeople(false)
+            return
+        }
 
-        // Get thumbnails for these photos
-        const photoIds = [...new Set(data.map(d => d.photo_id))]
+        // Deduplicate by photo_id — keep only first occurrence
+        const seenPhotoIds = new Set<string>()
+        const uniqueEmbeddings = embeddings.filter(d => {
+            if (seenPhotoIds.has(d.photo_id)) return false
+            seenPhotoIds.add(d.photo_id)
+            return true
+        })
+
+        // Get thumbnails for unique photo IDs
+        const photoIds = uniqueEmbeddings.map(d => d.photo_id)
+
         const { data: photos } = await supabase
             .from('photos')
-            .select('id, thumbnail_url')
+            .select('id, thumbnail_url, public_url')
             .in('id', photoIds)
 
-        const photoMap = Object.fromEntries((photos ?? []).map(p => [p.id, p.thumbnail_url]))
+        if (!photos) { setLoadingPeople(false); return }
 
-        const persons: FacePerson[] = data
+        const photoMap = Object.fromEntries(
+            photos.map(p => [p.id, p.thumbnail_url || p.public_url])
+        )
+
+        // Build final people list — guaranteed unique photo_ids
+        const persons: FacePerson[] = uniqueEmbeddings
             .filter(d => photoMap[d.photo_id])
             .map(d => ({
                 photo_id: d.photo_id,
@@ -68,8 +85,11 @@ export function GroupFinder({ eventId, onBack }: GroupFinderProps) {
     function togglePerson(photoId: string) {
         setSelected(prev => {
             const next = new Set(prev)
-            if (next.has(photoId)) next.delete(photoId)
-            else if (next.size < 4) next.add(photoId)
+            if (next.has(photoId)) {
+                next.delete(photoId)
+            } else if (next.size < 4) {
+                next.add(photoId)
+            }
             return next
         })
         setResults(null)
@@ -95,10 +115,9 @@ export function GroupFinder({ eventId, onBack }: GroupFinderProps) {
         } catch {
             setResults([])
         }
+
         setSearching(false)
     }
-
-    const [lightbox, setLightbox] = useState<string | null>(null)
 
     return (
         <div>
@@ -166,9 +185,9 @@ export function GroupFinder({ eventId, onBack }: GroupFinderProps) {
                         <div className="flex items-center justify-between">
                             <p className="text-xs text-gray-400">
                                 {selected.size === 0
-                                    ? 'Tap faces to select'
+                                    ? 'Tap faces to select (max 4)'
                                     : selected.size === 1
-                                        ? 'Select at least one more'
+                                        ? 'Select at least one more person'
                                         : `${selected.size} people selected`}
                             </p>
                             <button
@@ -189,7 +208,9 @@ export function GroupFinder({ eventId, onBack }: GroupFinderProps) {
                     {results.length === 0 ? (
                         <div className="text-center py-6">
                             <p className="text-gray-500 font-medium mb-1">No group photos found</p>
-                            <p className="text-gray-400 text-sm">No photos contain all selected people together</p>
+                            <p className="text-gray-400 text-sm">
+                                No photos contain all {selected.size} selected people together
+                            </p>
                         </div>
                     ) : (
                         <>
@@ -197,9 +218,9 @@ export function GroupFinder({ eventId, onBack }: GroupFinderProps) {
                                 {results.length} group photo{results.length !== 1 ? 's' : ''} found
                             </p>
                             <div className="grid grid-cols-3 gap-2">
-                                {results.map(photo => (
+                                {results.map((photo, index) => (
                                     <div
-                                        key={photo.id}
+                                        key={`group-result-${photo.id}-${index}`}
                                         className="aspect-square rounded-xl overflow-hidden cursor-pointer"
                                         onClick={() => setLightbox(photo.public_url)}
                                     >
@@ -223,7 +244,10 @@ export function GroupFinder({ eventId, onBack }: GroupFinderProps) {
                     className="fixed inset-0 bg-black/90 z-50 flex flex-col items-center justify-center p-4"
                     onClick={() => setLightbox(null)}
                 >
-                    <button className="absolute top-4 right-4 text-white/60 hover:text-white">
+                    <button
+                        className="absolute top-4 right-4 text-white/60 hover:text-white"
+                        onClick={() => setLightbox(null)}
+                    >
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path d="M18 6L6 18M6 6l12 12" />
                         </svg>
@@ -238,7 +262,7 @@ export function GroupFinder({ eventId, onBack }: GroupFinderProps) {
                         href={lightbox}
                         download
                         onClick={e => e.stopPropagation()}
-                        className="mt-4 px-5 py-2.5 bg-white text-gray-900 rounded-xl text-sm font-medium"
+                        className="mt-4 px-5 py-2.5 bg-white text-gray-900 rounded-xl text-sm font-medium hover:bg-gray-100 transition-colors"
                     >
                         Download
                     </a>
